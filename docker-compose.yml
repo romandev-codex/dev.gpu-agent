@@ -1,4 +1,4 @@
-# docker-compose.yml — llama.cpp (CUDA) + Hermes Agent
+# docker-compose.yml — llama.cpp (CUDA) + Hermes Agent + CloakBrowser
 #
 # Usage:
 #   cp .env.example .env          # fill in your settings
@@ -55,6 +55,32 @@ services:
     networks:
       - hermes-net
 
+  # ─── CloakBrowser — stealth Chromium CDP server ─────────────────────────
+  # Source-level C++ fingerprint patches; passes Cloudflare Turnstile, FPJS, etc.
+  # CDP endpoint: http://localhost:9222  (127.0.0.1 only — never expose publicly)
+  # Hermes browser tool connects via CAMOFOX_URL pointing at cloakserve.
+  # Docs: https://github.com/CloakHQ/CloakBrowser
+  cloakbrowser:
+    image: cloakhq/cloakbrowser
+    container_name: cloakbrowser
+    restart: unless-stopped
+    command: cloakserve
+    ports:
+      - "127.0.0.1:${CLOAKBROWSER_PORT:-9222}:9222"  # CDP — localhost only
+    environment:
+      # Optional: global proxy for all browser sessions
+      - CLOAKBROWSER_PROXY=${CLOAKBROWSER_PROXY:-}
+      # Disable background auto-update checks inside the container
+      - CLOAKBROWSER_AUTO_UPDATE=false
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9222/json/version || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - hermes-net
+
   # ─── Hermes Agent ─────────────────────────────────────────────────────────
   hermes:
     build:
@@ -67,6 +93,8 @@ services:
       - "127.0.0.1:9119:9119"                   # dashboard (localhost only)
     depends_on:
       llama-cpp:
+        condition: service_healthy
+      cloakbrowser:
         condition: service_healthy
     volumes:
       - ./data:/root/.hermes                     # persistent config / memory
@@ -86,6 +114,11 @@ services:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - TELEGRAM_ALLOWED_USERS=${TELEGRAM_ALLOWED_USERS:-}
       - DISCORD_TOKEN=${DISCORD_TOKEN:-}
+
+      # ── CloakBrowser CDP endpoint ──────────────────────────────────────────
+      # Routes Hermes browser tool through the stealth Chromium instance.
+      # CAMOFOX_URL is the hermes config key for an alternative local browser.
+      - CAMOFOX_URL=http://cloakbrowser:9222
 
       # ── Tool APIs ────────────────────────────────────────────────────────
       - EXA_API_KEY=${EXA_API_KEY:-}
