@@ -1,0 +1,104 @@
+# docker-compose.yml — llama.cpp (CUDA) + Hermes Agent
+#
+# Usage:
+#   cp .env.example .env          # fill in your settings
+#   mkdir -p models && cp /path/to/your.gguf models/
+#   docker compose up -d
+#
+# GPU requirement: NVIDIA GPU + CUDA toolkit + nvidia-container-toolkit
+#   Install: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html
+#
+# macOS note: NVIDIA CUDA is not supported on macOS. Run on Linux/WSL2.
+#
+# Hermes docs: https://hermes-agent.nousresearch.com/docs/
+
+services:
+
+  # ─── llama.cpp inference server (CUDA) ────────────────────────────────────
+  llama-cpp:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    container_name: llama-cpp-server
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${LLAMA_PORT:-8080}:8080"   # bind to localhost only
+    volumes:
+      - ./models:/models:ro                      # place .gguf files here
+    command:
+      - --model
+      - /models/${LLAMA_MODEL:-model.gguf}
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --n-gpu-layers
+      - "${N_GPU_LAYERS:-99}"                    # 99 = offload all layers
+      - --ctx-size
+      - "${CTX_SIZE:-8192}"
+      - --parallel
+      - "${N_PARALLEL:-4}"                       # concurrent request slots
+      - --flash-attn                             # enable flash attention
+    environment:
+      - LLAMA_API_KEY=${LLAMA_API_KEY:-}         # optional: secure the endpoint
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s                         # allow model load time
+    networks:
+      - hermes-net
+
+  # ─── Hermes Agent ─────────────────────────────────────────────────────────
+  hermes:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: hermes-agent-local
+    container_name: hermes-agent
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:9119:9119"                   # dashboard (localhost only)
+    depends_on:
+      llama-cpp:
+        condition: service_healthy
+    volumes:
+      - ./data:/root/.hermes                     # persistent config / memory
+    environment:
+      # ── llama.cpp as the OpenAI-compatible backend ──────────────────────
+      # Hermes will talk to llama.cpp via its /v1 OpenAI-compatible API.
+      # Set provider to "openai" and override the base URL in config.yaml.
+      # The model name is ignored by llama.cpp (uses whatever is loaded).
+      - LLAMA_CPP_BASE_URL=http://llama-cpp:8080/v1
+      - LLAMA_CPP_API_KEY=${LLAMA_API_KEY:-dummy}
+
+      # ── Optional cloud providers (add keys in .env) ─────────────────────
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+
+      # ── Messaging integrations ───────────────────────────────────────────
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_ALLOWED_USERS=${TELEGRAM_ALLOWED_USERS:-}
+      - DISCORD_TOKEN=${DISCORD_TOKEN:-}
+
+      # ── Tool APIs ────────────────────────────────────────────────────────
+      - EXA_API_KEY=${EXA_API_KEY:-}
+      - FIRECRAWL_API_KEY=${FIRECRAWL_API_KEY:-}
+
+      # ── Debug flags ──────────────────────────────────────────────────────
+      - PYTHONUNBUFFERED=1
+    env_file:
+      - path: .env
+        required: false
+    networks:
+      - hermes-net
+
+networks:
+  hermes-net:
+    driver: bridge

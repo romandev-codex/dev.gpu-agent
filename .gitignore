@@ -1,0 +1,5 @@
+# .gitignore
+.env
+data/
+models/*.gguf
+models/*.bin
