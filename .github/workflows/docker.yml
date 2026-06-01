@@ -1,0 +1,122 @@
+name: Build & Deploy
+
+on:
+  push:
+    branches: [main, master]
+    tags:    ["v*.*.*"]
+  pull_request:
+    branches: [main, master]
+
+# Cancel in-flight runs for the same ref (saves minutes on quick pushes)
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/hermes
+
+jobs:
+  # ── 1. Build & push ────────────────────────────────────────────────────────
+  build:
+    name: Build image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write         # needed to push to ghcr.io
+
+    outputs:
+      image: ${{ steps.meta.outputs.tags }}
+      digest: ${{ steps.push.outputs.digest }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Generates tags:
+      #   • ghcr.io/<owner>/hermes:latest          (on default branch)
+      #   • ghcr.io/<owner>/hermes:v1.2.3          (on semver tag)
+      #   • ghcr.io/<owner>/hermes:sha-<short-sha> (always)
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-,format=short
+
+      - name: Build (and push on non-PR)
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.app
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Layer cache from/to the registry  (free on GHCR)
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
+          cache-to:   type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
+          build-args: |
+            HERMES_REF=${{ github.ref_name }}
+
+      - name: Image digest
+        if: github.event_name != 'pull_request'
+        run: echo "Pushed ${{ steps.push.outputs.digest }}"
+
+  # ── 2. Deploy (SSH) ────────────────────────────────────────────────────────
+  # Requires these repository secrets:
+  #   DEPLOY_HOST   — hostname or IP of the GPU server
+  #   DEPLOY_USER   — SSH user (must be in the 'docker' group)
+  #   DEPLOY_KEY    — private SSH key (RSA / Ed25519)
+  #   DEPLOY_PATH   — absolute path to the project on the server (e.g. /opt/hermes)
+  #
+  # The step pulls the freshly-pushed image and restarts the container via
+  # docker compose.  Add any extra env vars to the server's .env file.
+  deploy:
+    name: Deploy to server
+    needs: build
+    # Only deploy on pushes to the default branch or a version tag — never on PRs
+    if: |
+      github.event_name == 'push' &&
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host:     ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key:      ${{ secrets.DEPLOY_KEY }}
+          script: |
+            set -e
+            cd "${{ secrets.DEPLOY_PATH }}"
+
+            # Pull the latest image (already built in the previous job)
+            IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+            echo "Pulling $IMAGE …"
+            docker pull "$IMAGE"
+
+            # Update the running stack with zero manual downtime
+            # docker compose will only restart services whose image changed.
+            echo "Restarting services …"
+            HERMES_IMAGE="$IMAGE" docker compose up -d --remove-orphans
+
+            # Prune images that are no longer referenced
+            docker image prune -f

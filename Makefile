@@ -1,4 +1,8 @@
 IMAGE       := hermes-all
+REGISTRY    := ghcr.io
+OWNER       ?= $(shell git config --get remote.origin.url | sed 's|.*[:/]\([^/]*\)/.*|\1|' | tr '[:upper:]' '[:lower:]')
+REMOTE_IMAGE := $(REGISTRY)/$(OWNER)/hermes
+TAG         ?= latest
 COMPOSE     := docker compose
 ENV_FILE    := .env
 
@@ -67,6 +71,24 @@ ps:
 	$(COMPOSE) ps
 
 # ── Utilities ───────────────────────────────────────────────────────────────
+# ── Registry ────────────────────────────────────────────────────────────────
+.PHONY: login
+login:
+	echo "$$CR_PAT" | docker login $(REGISTRY) -u $(OWNER) --password-stdin
+
+.PHONY: tag
+tag: build
+	docker tag $(IMAGE) $(REMOTE_IMAGE):$(TAG)
+
+.PHONY: push
+push: tag
+	docker push $(REMOTE_IMAGE):$(TAG)
+
+.PHONY: pull
+pull:
+	docker pull $(REMOTE_IMAGE):$(TAG)
+
+# ── Utilities ───────────────────────────────────────────────────────────────
 .PHONY: models-dir
 models-dir:
 	mkdir -p models data
@@ -95,6 +117,13 @@ help:
 	@echo "  down           Stop and remove all services"
 	@echo "  compose-logs   Tail all service logs"
 	@echo "  ps             Show running services"
+	@echo ""
+	@echo "  Registry (GHCR)"
+	@echo "  ──────────────────────────────────"
+	@echo "  login          Authenticate to ghcr.io (needs CR_PAT env var)"
+	@echo "  tag            Tag local image as \$(REMOTE_IMAGE):\$(TAG)"
+	@echo "  push           Build, tag, and push to \$(REGISTRY)"
+	@echo "  pull           Pull \$(REMOTE_IMAGE):\$(TAG) from \$(REGISTRY)"
 	@echo ""
 	@echo "  Utilities"
 	@echo "  ──────────────────────────────────"
