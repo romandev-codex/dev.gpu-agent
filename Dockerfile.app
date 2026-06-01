@@ -98,72 +98,8 @@ COPY --from=py_builder /opt/venv /opt/venv
 COPY --from=py_builder /opt/cloakbrowser /opt/cloakbrowser
 
 # ── supervisord configuration ──────────────────────────────────────────────
-RUN mkdir -p /etc/supervisor /run/supervisor && \
-cat > /etc/supervisor/supervisord.conf << 'EOF'
-[supervisord]
-nodaemon=true
-logfile=/dev/null
-logfile_maxbytes=0
-pidfile=/run/supervisor/supervisord.pid
-childlogdir=/dev/null
-
-[unix_http_server]
-file=/run/supervisor/supervisor.sock
-
-[rpcinterface:supervisor]
-supervisor.rpcinterface_factory=supervisor.rpcinterface:make_main_rpcinterface
-
-[supervisorctl]
-serverurl=unix:///run/supervisor/supervisor.sock
-
-; ── 1. llama.cpp CUDA inference server ────────────────────────────────────
-[program:llama-server]
-command=/bin/sh -c '/llama-server \
-    --model "/models/%(ENV_LLAMA_MODEL)s" \
-    --host 0.0.0.0 \
-    --port 8080 \
-    --n-gpu-layers %(ENV_N_GPU_LAYERS)s \
-    --ctx-size %(ENV_CTX_SIZE)s \
-    --parallel %(ENV_N_PARALLEL)s \
-    --flash-attn'
-autostart=true
-autorestart=true
-startsecs=5
-stdout_logfile=/dev/stdout
-stdout_logfile_maxbytes=0
-stderr_logfile=/dev/stderr
-stderr_logfile_maxbytes=0
-priority=100
-
-; ── 2. CloakBrowser stealth Chromium CDP server ───────────────────────────
-[program:cloakbrowser]
-command=cloakserve
-autostart=true
-autorestart=true
-startsecs=5
-stdout_logfile=/dev/stdout
-stdout_logfile_maxbytes=0
-stderr_logfile=/dev/stderr
-stderr_logfile_maxbytes=0
-priority=200
-
-; ── 3. Hermes Agent gateway ───────────────────────────────────────────────
-; Override docker-compose service hostnames to localhost for single-container.
-[program:hermes]
-command=hermes gateway run
-environment=
-    CAMOFOX_URL="http://localhost:9222",
-    LLAMA_CPP_BASE_URL="http://localhost:8080/v1",
-    LLAMA_CPP_API_KEY="%(ENV_LLAMA_API_KEY)s"
-autostart=true
-autorestart=true
-startsecs=10
-stdout_logfile=/dev/stdout
-stdout_logfile_maxbytes=0
-stderr_logfile=/dev/stderr
-stderr_logfile_maxbytes=0
-priority=300
-EOF
+RUN mkdir -p /etc/supervisor /run/supervisor
+COPY supervisord.conf /etc/supervisor/supervisord.conf
 
 # ── Model download ────────────────────────────────────────────────────────
 RUN mkdir -p /models && \
