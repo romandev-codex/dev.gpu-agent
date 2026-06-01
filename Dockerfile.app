@@ -72,7 +72,7 @@ ENV PYTHONUNBUFFERED=1 \
     CLOAKBROWSER_CACHE_DIR=/opt/cloakbrowser \
     CLOAKBROWSER_AUTO_UPDATE=false \
     # llama.cpp defaults — override at runtime via -e LLAMA_MODEL=...
-    LLAMA_MODEL=model.gguf \
+    LLAMA_MODEL=Hermes-3-Llama-3.1-8B.Q4_K_M.gguf \
     N_GPU_LAYERS=99 \
     CTX_SIZE=8192 \
     N_PARALLEL=4 \
@@ -164,6 +164,12 @@ stderr_logfile=/dev/stderr
 stderr_logfile_maxbytes=0
 priority=300
 EOF
+
+# ── Model download ────────────────────────────────────────────────────────
+RUN mkdir -p /models && \
+    curl -fL --retry 3 --progress-bar \
+    "https://huggingface.co/NousResearch/Hermes-3-Llama-3.1-8B-GGUF/resolve/main/Hermes-3-Llama-3.1-8B.Q4_K_M.gguf" \
+    -o "/models/Hermes-3-Llama-3.1-8B.Q4_K_M.gguf"
 
 # ── Volumes, ports, entrypoint ─────────────────────────────────────────────
 VOLUME ["/models", "/root/.hermes"]
