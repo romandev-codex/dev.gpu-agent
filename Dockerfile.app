@@ -1,3 +1,4 @@
+# V1.1
 # syntax=docker/dockerfile:1.7
 # Dockerfile.app — single container: llama.cpp (CUDA) + Hermes Agent + CloakBrowser
 #
